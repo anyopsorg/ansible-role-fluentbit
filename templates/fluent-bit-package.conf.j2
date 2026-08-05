@@ -1,0 +1,72 @@
+# {{ ansible_managed }}
+# =============================================================================
+# Fluent Bit (package mode) — file tails -> OpenSearch
+# Host: {{ inventory_hostname }}
+# =============================================================================
+
+[SERVICE]
+    Flush             {{ fluentbit_flush_interval }}
+    Daemon            Off
+    Log_Level         {{ fluentbit_log_level }}
+    Parsers_File      parsers.conf
+{% if fluentbit_http_server %}
+    # Metrics/health: /api/v1/health, /api/v1/metrics(/prometheus)
+    HTTP_Server       On
+    HTTP_Listen       {{ fluentbit_http_listen }}
+    HTTP_Port         {{ fluentbit_http_port }}
+{% endif %}
+    # Filesystem buffering: an endpoint outage queues to disk rather than
+    # dropping records. Bounded per-output below.
+    storage.path      {{ fluentbit_state_dir }}/buffer
+    storage.sync      normal
+    storage.checksum  Off
+    storage.backlog.mem_limit {{ fluentbit_storage_backlog_limit }}
+
+{% for input in fluentbit_tail_inputs %}
+[INPUT]
+    Name              tail
+    Tag               {{ input.tag }}
+    Path              {{ input.path }}
+{% if input.parser is defined and input.parser %}
+    Parser            {{ input.parser }}
+{% endif %}
+    # Offsets persist here so a restart resumes instead of re-shipping.
+    DB                {{ fluentbit_state_dir }}/{{ input.db | default(input.tag | replace('.', '-') ~ '.db') }}
+    storage.type      filesystem
+    Mem_Buf_Limit     {{ fluentbit_mem_buf_limit }}
+    Skip_Long_Lines   On
+    Refresh_Interval  5
+
+{% if input.records is defined and input.records %}
+[FILTER]
+    Name              record_modifier
+    Match             {{ input.tag }}
+{% for key, value in input.records.items() %}
+    Record            {{ key }} {{ value }}
+{% endfor %}
+
+{% endif %}
+{% endfor %}
+[OUTPUT]
+    Name              opensearch
+    Match             *
+    Host              {{ fluentbit_os_host }}
+    Port              {{ fluentbit_os_port }}
+    HTTP_User         {{ fluentbit_os_user }}
+    HTTP_Passwd       {{ fluentbit_os_password }}
+    tls               {{ fluentbit_os_tls }}
+    tls.verify        {{ fluentbit_os_tls_verify }}
+    Logstash_Format   On
+    Logstash_Prefix   {{ fluentbit_logstash_prefix }}
+{% if fluentbit_logstash_prefix_key %}
+    Logstash_Prefix_Key {{ fluentbit_logstash_prefix_key }}
+{% endif %}
+    Logstash_DateFormat {{ fluentbit_index_date_format }}
+    Time_Key          @timestamp
+    # OpenSearch 2.x/3.x removed mapping types; sending one is an error.
+    Suppress_Type_Name On
+    Buffer_Size       2MB
+    # Surface rejected documents in the service log instead of failing silently.
+    Trace_Error       On
+    Retry_Limit       {{ fluentbit_retry_limit }}
+    storage.total_limit_size {{ fluentbit_storage_total_limit }}

@@ -1,0 +1,158 @@
+# {{ ansible_managed }}
+# =============================================================================
+# Fluent Bit — Docker container logs -> OpenSearch
+# Host: {{ inventory_hostname }}
+# =============================================================================
+
+[SERVICE]
+    Flush                     {{ fluentbit_flush_interval }}
+    Daemon                    Off
+    Log_Level                 {{ fluentbit_log_level }}
+    Parsers_File              parsers.conf
+{% if fluentbit_http_server %}
+    # Metrics/health: /api/v1/health, /api/v1/metrics/prometheus
+    HTTP_Server               On
+    HTTP_Listen               0.0.0.0
+    HTTP_Port                 {{ fluentbit_http_port }}
+{% endif %}
+    # Filesystem buffering: a gateway or cluster outage queues to disk rather
+    # than dropping records. Bounded per-output below.
+    storage.path              {{ fluentbit_state_dir }}/storage
+    storage.sync              normal
+    storage.checksum          off
+    storage.backlog.mem_limit {{ fluentbit_storage_backlog_limit }}
+    storage.max_chunks_up     64
+
+# -----------------------------------------------------------------------------
+# INPUT — Docker's json-file logs
+# -----------------------------------------------------------------------------
+# Tailing the json-file driver's output covers swarm services and plain
+# containers identically, needs no change to how any app is deployed, and keeps
+# collecting across container restarts.
+[INPUT]
+    Name              tail
+    Alias             docker_logs
+    Tag_Regex         (?<container_id>[0-9a-f]{64})-json\.log$
+    Tag               docker.<container_id>
+    Path              {{ fluentbit_docker_containers_dir }}/*/*-json.log
+    Parser            docker
+    # Offsets persist here so a restart resumes instead of re-shipping.
+    DB                {{ fluentbit_state_dir }}/tail.db
+    DB.sync           normal
+    DB.locking        true
+    Mem_Buf_Limit     {{ fluentbit_mem_buf_limit }}
+    storage.type      filesystem
+    Skip_Long_Lines   On
+    Skip_Empty_Lines  On
+    Refresh_Interval  10
+    Rotate_Wait       5
+{% if fluentbit_multiline_java %}
+    # `docker` reassembles lines the json-file driver split at 16 KB;
+    # `java_stack` folds multi-line exceptions into a single record.
+    multiline.parser  docker, java_stack
+{% else %}
+    multiline.parser  docker
+{% endif %}
+
+# -----------------------------------------------------------------------------
+# FILTERS
+# -----------------------------------------------------------------------------
+# Attach stack/service/image and compute the target index prefix.
+[FILTER]
+    Name    lua
+    Alias   docker_metadata
+    Match   docker.*
+    script  enrich_docker.lua
+    call    enrich
+
+{% if fluentbit_parse_json_logs %}
+# Apps that log structured JSON get their fields lifted to top level; apps that
+# log plaintext are untouched (Reserve_Data keeps the original on no-match).
+[FILTER]
+    Name          parser
+    Alias         app_json
+    Match         docker.*
+    Key_Name      log
+    Parser        app_json
+    Reserve_Data  On
+{% if fluentbit_ecs_mode %}
+    # Off: keeping the raw line under `log` would overwrite the ECS `log`
+    # object (log.level/log.logger) the app just emitted. The body is not lost
+    # — ECS carries it in `message`, and plaintext lines are moved there below.
+    Preserve_Key  Off
+{% else %}
+    Preserve_Key  On
+{% endif %}
+{% endif %}
+{% if fluentbit_ecs_mode %}
+
+# Plaintext containers still carry their line in `log`, which is a string, while
+# ECS containers need `log` to be an object. One index cannot map a field as
+# both, so move the plaintext body to `message` — the same field ECS uses for
+# it. Records that parsed as ECS already have `message`, so the condition skips
+# them and their `log` object survives untouched.
+[FILTER]
+    Name      modify
+    Alias     plaintext_body
+    Match     docker.*
+    Condition Key_Does_Not_Exist message
+    Rename    log message
+{% endif %}
+
+# Identify which host a record came from — the service is global, so this is
+# what distinguishes nodes once the swarm grows.
+[FILTER]
+    Name    record_modifier
+    Alias   add_host
+    Match   docker.*
+    Record  host {{ inventory_hostname }}
+    Record  datacenter {{ infra_location_dc | default('UZ') }}
+
+# The built-in `docker` multiline parser handles the json-file envelope itself
+# and keeps `time`, so Time_Keep in parsers.conf does not apply. Its value is
+# already emitted as @timestamp — drop the duplicate.
+[FILTER]
+    Name       record_modifier
+    Alias      drop_dup_time
+    Match      docker.*
+    Remove_key time
+
+# -----------------------------------------------------------------------------
+# OUTPUT — OpenSearch via the nginx gateway
+# -----------------------------------------------------------------------------
+[OUTPUT]
+    Name              opensearch
+    Alias             opensearch_out
+    Match             docker.*
+    Host              {{ fluentbit_os_host }}
+    Port              {{ fluentbit_os_port }}
+    tls               {{ fluentbit_os_tls }}
+    tls.verify        {{ fluentbit_os_tls_verify }}
+    HTTP_User         {{ fluentbit_os_user }}
+    HTTP_Passwd       ${FLUENTBIT_OS_PASSWORD}
+
+    # Index: <project>-<environment>-logs-YYYY.MM.DD, where the prefix comes
+    # from the record field set by enrich_docker.lua. Logstash_Prefix is only
+    # the fallback for records that somehow lack the key.
+    Logstash_Format     On
+    Logstash_Prefix     {{ fluentbit_fallback_project }}-{{ fluentbit_environment }}-logs
+    Logstash_Prefix_Key $os_index_prefix
+    Logstash_DateFormat {{ fluentbit_index_date_format }}
+    Time_Key            @timestamp
+    # Deliberately no Time_Key_Format: the plugin appends the fractional part
+    # and 'Z' itself, so specifying %L/%z here emits a literal '%L' and a second
+    # offset — e.g. 2026-07-21T13:16:54.%L+0000.067Z — which OpenSearch cannot
+    # map as a date. The default (%Y-%m-%dT%H:%M:%S) yields correct ISO 8601.
+
+    # OpenSearch 2.x/3.x removed mapping types; sending one is an error.
+    Suppress_Type_Name  On
+    # Dots in field names would be read as object nesting and collide.
+    Replace_Dots        On
+    # Surface rejected documents in the container log instead of failing silently.
+    Trace_Error         On
+    Generate_ID         Off
+
+    Retry_Limit             {{ fluentbit_retry_limit }}
+    storage.total_limit_size {{ fluentbit_storage_total_limit }}
+    Buffer_Size             8MB
+    Compress                gzip

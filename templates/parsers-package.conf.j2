@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+# Parsers for package mode — one [PARSER] block per fluentbit_parsers entry.
+
+{% for p in fluentbit_parsers %}
+[PARSER]
+    Name         {{ p.name }}
+    Format       {{ p.format | default('json') }}
+{% if p.time_key is defined %}
+    Time_Key     {{ p.time_key }}
+{% endif %}
+{% if p.time_format is defined %}
+    Time_Format  {{ p.time_format }}
+{% endif %}
+{% if p.time_keep is defined %}
+    Time_Keep    {{ p.time_keep }}
+{% endif %}
+{% if p.regex is defined %}
+    Regex        {{ p.regex }}
+{% endif %}
+
+{% endfor %}

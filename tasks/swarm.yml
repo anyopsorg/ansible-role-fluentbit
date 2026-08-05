@@ -1,0 +1,111 @@
+---
+# =============================================================================
+# swarm mode — official container as a Swarm global service, tailing
+# Docker's json-file container logs
+# =============================================================================
+
+- name: Check Docker Swarm is active and this node is a manager
+  ansible.builtin.command: docker info --format '{% raw %}{{.Swarm.LocalNodeState}}:{{.Swarm.ControlAvailable}}{% endraw %}'
+  register: fluentbit_swarm_state
+  changed_when: false
+  check_mode: false
+  become: true
+
+- name: Fail when the node cannot deploy a stack
+  ansible.builtin.fail:
+    msg: >-
+      Swarm state is '{{ fluentbit_swarm_state.stdout }}' (want 'active:true').
+      Swarm mode deploys a Swarm service and must run against a swarm manager.
+  when: fluentbit_swarm_state.stdout != 'active:true'
+
+# --- Filesystem ------------------------------------------------------------
+- name: Create Fluent Bit directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  become: true
+  loop:
+    - { path: "{{ fluentbit_config_dir }}", mode: "0750" }
+    - { path: "{{ fluentbit_state_dir }}", mode: "0750" }
+    - { path: "{{ fluentbit_state_dir }}/storage", mode: "0750" }
+
+- name: Deploy Fluent Bit configuration
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ fluentbit_config_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0640"
+  become: true
+  loop:
+    - { src: fluent-bit-swarm.conf.j2, dest: fluent-bit.conf }
+    - { src: parsers-swarm.conf.j2, dest: parsers.conf }
+    - { src: enrich_docker.lua.j2, dest: enrich_docker.lua }
+  notify: restart fluent-bit (swarm)
+
+# Holds the ingest password, so root-only.
+- name: Deploy the Swarm stack file
+  ansible.builtin.template:
+    src: stack.yml.j2
+    dest: "{{ fluentbit_config_dir }}/stack.yml"
+    owner: root
+    group: root
+    mode: "0600"
+  become: true
+  register: fluentbit_stack_file
+
+# --- Deploy ----------------------------------------------------------------
+- name: Check whether the service already exists
+  ansible.builtin.command: >-
+    docker service inspect {{ fluentbit_stack_name }}_{{ fluentbit_service_name }}
+  register: fluentbit_service_check
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  become: true
+
+- name: Deploy the Fluent Bit stack
+  ansible.builtin.command: >-
+    docker stack deploy
+      --detach=true
+      --resolve-image=changed
+      --compose-file {{ fluentbit_config_dir }}/stack.yml
+      {{ fluentbit_stack_name }}
+  become: true
+  register: fluentbit_deploy
+  # `docker stack deploy` converges to the spec, so re-running is safe. Only
+  # report changed when the spec actually moved or the service was absent.
+  changed_when: >-
+    fluentbit_stack_file.changed or fluentbit_service_check.rc != 0
+
+# The config is bind-mounted, so a file edit alone does not restart the
+# container — the handler forces a rolling update to pick it up.
+- name: Flush handlers so config changes take effect now
+  ansible.builtin.meta: flush_handlers
+
+# --- Verify ----------------------------------------------------------------
+- name: Wait for the service to report a running task
+  # Kept on one line: a folded scalar preserves newlines on more-indented
+  # continuation lines, which breaks the pipeline.
+  ansible.builtin.shell: "set -o pipefail; docker service ps {{ fluentbit_stack_name }}_{{ fluentbit_service_name }} --filter desired-state=running --format '{% raw %}{{.CurrentState}}{% endraw %}' | head -1"
+  args:
+    executable: /bin/bash
+  register: fluentbit_task_state
+  until: fluentbit_task_state.stdout is search('Running')
+  retries: 12
+  delay: 5
+  changed_when: false
+  become: true
+  # Nothing was actually deployed under --check, so there is no task to wait for.
+  when: not ansible_check_mode
+
+- name: Report deployment state
+  ansible.builtin.debug:
+    msg: >-
+      Fluent Bit {{ fluentbit_version }} running as
+      {{ fluentbit_stack_name }}_{{ fluentbit_service_name }} (global) —
+      shipping to {{ fluentbit_os_host }} as
+      <project>-{{ fluentbit_environment }}-logs-YYYY.MM.DD

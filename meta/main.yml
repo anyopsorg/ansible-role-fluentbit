@@ -1,0 +1,29 @@
+---
+galaxy_info:
+  role_name: fluentbit
+  author: anyops
+  description: >-
+    General Fluent Bit log shipper to OpenSearch. Two modes: 'package'
+    (native package + systemd, tail arbitrary files — e.g. nginx JSON access
+    logs) and 'swarm' (Docker Swarm global service shipping container logs
+    with stack/service/image enrichment and per-project indices).
+  license: proprietary
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+    - name: EL
+      versions:
+        - "8"
+        - "9"
+  galaxy_tags:
+    - logging
+    - opensearch
+    - fluentbit
+    - docker
+    - swarm
+    - nginx
+
+dependencies: []

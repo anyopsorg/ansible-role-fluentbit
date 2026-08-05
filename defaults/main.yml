@@ -1,0 +1,128 @@
+---
+# =============================================================================
+# fluentbit — general log shipper role (single source of truth, anyopsorg)
+# =============================================================================
+# One role, two deployment modes, selected with `fluentbit_mode`:
+#
+#   package  — install the native fluent-bit package (apt/yum), run under
+#              systemd, tail arbitrary files (fluentbit_tail_inputs) into
+#              OpenSearch. Used by: TayanchBank edge nginx access analytics.
+#
+#   swarm    — deploy the official container as a Docker Swarm *global*
+#              service, tail Docker's json-file container logs, enrich each
+#              record with stack/service/image via Lua (no docker.sock), and
+#              route to per-project indices. Used by: MKB container logging.
+#
+# Common OpenSearch output settings are shared by both modes (fluentbit_os_*).
+
+fluentbit_mode: "package"
+
+# ============ OPENSEARCH OUTPUT (both modes) ============
+fluentbit_os_host: "127.0.0.1"
+fluentbit_os_port: 9200
+fluentbit_os_tls: "On"
+# "On" when the endpoint presents a publicly-trusted cert (e.g. behind an nginx
+# gateway with a real wildcard); "Off" for self-signed internal cluster certs.
+fluentbit_os_tls_verify: "On"
+fluentbit_os_user: "fluentbit"
+# fluentbit_os_password — REQUIRED, supply from a vaulted secrets file.
+
+# ============ BUFFERING / RELIABILITY (both modes) ============
+# Filesystem buffering: an endpoint outage queues to disk instead of dropping
+# records. Bounded so a long outage cannot fill the disk.
+fluentbit_state_dir: "/var/lib/fluent-bit"
+fluentbit_storage_total_limit: "512M"
+fluentbit_storage_backlog_limit: "64M"
+fluentbit_mem_buf_limit: "32M"
+# "False" => retry forever (paired with the bounded disk buffer above).
+fluentbit_retry_limit: "False"
+fluentbit_flush_interval: 5
+
+# ============ OBSERVABILITY (both modes) ============
+fluentbit_http_server: true
+# package mode default binds loopback; swarm mode publishes host-mode port.
+fluentbit_http_listen: "127.0.0.1"
+fluentbit_http_port: 2020
+fluentbit_log_level: "info"
+
+# ============ PREFLIGHT (both modes) ============
+# Verify the OpenSearch endpoint answers before deploying. Deploy still
+# proceeds on failure (logs buffer to disk), but the check is reported loudly.
+fluentbit_preflight_check: true
+
+# Host entries pinned in /etc/hosts (and on the swarm service). Empty by
+# default; populate only to work around a DNS gap, e.g.
+#   fluentbit_extra_hosts: {opensearch.example.com: "172.23.4.38"}
+fluentbit_extra_hosts: {}
+
+# =============================================================================
+# PACKAGE MODE
+# =============================================================================
+fluentbit_package: "fluent-bit"
+fluentbit_service: "fluent-bit"
+fluentbit_conf_dir: "/etc/fluent-bit"
+fluentbit_binary: "/opt/fluent-bit/bin/fluent-bit"
+
+# Files to tail. Each item:
+#   tag       — fluent-bit tag (required)
+#   path      — file glob to tail (required)
+#   parser    — parser name from fluentbit_parsers (optional)
+#   db        — tail-offset DB filename under fluentbit_state_dir (default: <tag>.db)
+#   records   — dict of static fields added to every record (optional)
+# Example (TayanchBank nginx access analytics):
+#   fluentbit_tail_inputs:
+#     - tag: nginx.access
+#       path: /var/log/nginx/json_access.log
+#       parser: nginx_json
+#       records:
+#         log_host: "{{ inventory_hostname }}"
+fluentbit_tail_inputs: []
+
+# Custom [PARSER] blocks for package mode. Each item:
+#   name, format, time_key, time_format, time_keep (all strings)
+# Example (nginx json_encoded with millisecond epoch):
+#   fluentbit_parsers:
+#     - name: nginx_json
+#       format: json
+#       time_key: msec
+#       time_format: "%s.%L"
+#       time_keep: "On"
+fluentbit_parsers: []
+
+# Index naming (package mode): daily indices <prefix>-YYYY.MM.DD
+fluentbit_logstash_prefix: "logs"
+fluentbit_index_date_format: "%Y.%m.%d"
+# Optional record key that overrides the prefix per record (advanced).
+fluentbit_logstash_prefix_key: ""
+
+# =============================================================================
+# SWARM MODE (Docker container logs -> per-project indices)
+# =============================================================================
+# Image: point at a registry proxy-cache when the public repo is blocked
+# (e.g. harbor.<org>/library/fluent/fluent-bit).
+fluentbit_image: "fluent/fluent-bit"
+fluentbit_version: "4.1.1"
+
+fluentbit_stack_name: "logging"
+fluentbit_service_name: "fluent-bit"
+fluentbit_memory_limit: "256M"
+fluentbit_memory_reservation: "64M"
+
+fluentbit_config_dir: "/etc/fluent-bit"
+fluentbit_docker_containers_dir: "/var/lib/docker/containers"
+
+# Final index = <project>-<environment>-logs-YYYY.MM.DD; <project> is derived
+# per-container: swarm stack > compose project > service > container name.
+fluentbit_environment: "prod"
+fluentbit_fallback_project: "unclassified"
+fluentbit_exclude_projects: []
+
+# Join Java stack traces onto the preceding line (one exception, one document).
+fluentbit_multiline_java: true
+# Lift structured-JSON app logs to top level; plaintext lines are untouched.
+fluentbit_parse_json_logs: true
+# ECS mode — frees `log`/`service` for apps that emit Elastic Common Schema.
+# See README before enabling: it renames fields.
+fluentbit_ecs_mode: false
+# Extract W3C trace_id/span_id ("[app,traceId,spanId]") into fields.
+fluentbit_extract_trace_ids: true

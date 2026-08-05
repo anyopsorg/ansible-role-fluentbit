@@ -1,0 +1,65 @@
+# {{ ansible_managed }}
+# Deployed with `docker stack deploy` — declarative and idempotent, and the
+# same mechanism already used for the crm/insurance stacks on this host.
+version: "3.8"
+
+services:
+  {{ fluentbit_service_name }}:
+    image: {{ fluentbit_image }}:{{ fluentbit_version }}
+    # Runs as root: the Docker container/log directories are root-owned 0700.
+    user: root
+    command:
+      - /fluent-bit/bin/fluent-bit
+      - --config=/fluent-bit/etc/fluent-bit.conf
+
+    environment:
+      FLUENTBIT_OS_PASSWORD: "{{ fluentbit_os_password }}"
+
+{% if fluentbit_http_server %}
+    # Health/metrics endpoint. Published in host mode so it stays node-local
+    # (the routing mesh would make every node answer for every other node) and
+    # so Alloy can scrape this node's own collector.
+    ports:
+      - target: {{ fluentbit_http_port }}
+        published: {{ fluentbit_http_port }}
+        protocol: tcp
+        mode: host
+{% endif %}
+
+{% if fluentbit_extra_hosts %}
+    # opensearch.mkb.uz has no DNS record yet — pin it until it does.
+    extra_hosts:
+{% for name, ip in fluentbit_extra_hosts.items() %}
+      - "{{ name }}:{{ ip }}"
+{% endfor %}
+{% endif %}
+
+    volumes:
+      # Log source + the config.v2.json files used for metadata enrichment.
+      - {{ fluentbit_docker_containers_dir }}:{{ fluentbit_docker_containers_dir }}:ro
+      - {{ fluentbit_config_dir }}:/fluent-bit/etc:ro
+      # Tail offsets and the filesystem buffer must outlive the container.
+      - {{ fluentbit_state_dir }}:{{ fluentbit_state_dir }}
+
+    deploy:
+      # One collector per node, including any node joined later.
+      mode: global
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          memory: {{ fluentbit_memory_limit }}
+        reservations:
+          memory: {{ fluentbit_memory_reservation }}
+
+    # Bound the collector's own logs; enrich_docker.lua drops them from the
+    # pipeline, but they still land on disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

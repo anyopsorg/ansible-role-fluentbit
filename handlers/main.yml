@@ -1,0 +1,17 @@
+---
+# package mode — plain systemd restart.
+- name: restart fluent-bit (systemd)
+  ansible.builtin.systemd:
+    name: "{{ fluentbit_service }}"
+    state: restarted
+  become: true
+
+# swarm mode — the config is bind-mounted, so rewriting it does not restart the
+# process. Force a rolling update so the new config is loaded.
+# Skipped on first install — the deploy task already started fresh tasks.
+- name: restart fluent-bit (swarm)
+  ansible.builtin.command: >-
+    docker service update --force --detach=true
+      {{ fluentbit_stack_name }}_{{ fluentbit_service_name }}
+  become: true
+  when: fluentbit_service_check.rc | default(1) == 0

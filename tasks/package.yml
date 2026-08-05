@@ -1,0 +1,79 @@
+---
+# =============================================================================
+# package mode — native fluent-bit under systemd, tailing files
+# =============================================================================
+
+- name: Add fluent-bit apt key (Debian/Ubuntu)
+  ansible.builtin.get_url:
+    url: https://packages.fluentbit.io/fluentbit.key
+    dest: /usr/share/keyrings/fluentbit.asc
+    mode: "0644"
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: Add fluent-bit apt repository (Debian/Ubuntu)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/fluentbit.asc] https://packages.fluentbit.io/{{ ansible_distribution | lower }}/{{ ansible_distribution_release }} {{ ansible_distribution_release }} main"
+    filename: fluent-bit
+    state: present
+  become: true
+  when: ansible_os_family == "Debian"
+
+- name: Add fluent-bit yum repository (RHEL/CentOS)
+  ansible.builtin.yum_repository:
+    name: fluent-bit
+    description: Fluent Bit
+    # NOTE: no $basearch suffix — packages.fluentbit.io serves repodata directly
+    # under centos/<releasever>/ (verified: .../centos/8/repodata/repomd.xml = 200)
+    baseurl: https://packages.fluentbit.io/centos/$releasever/
+    gpgcheck: true
+    gpgkey: https://packages.fluentbit.io/fluentbit.key
+  become: true
+  when: ansible_os_family == "RedHat"
+
+- name: Install fluent-bit
+  ansible.builtin.package:
+    name: "{{ fluentbit_package }}"
+    state: present
+  become: true
+
+- name: Ensure state dir for tail DB and disk buffer
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  become: true
+  loop:
+    - "{{ fluentbit_state_dir }}"
+    - "{{ fluentbit_state_dir }}/buffer"
+
+- name: Deploy parsers.conf
+  ansible.builtin.template:
+    src: parsers-package.conf.j2
+    dest: "{{ fluentbit_conf_dir }}/parsers.conf"
+    mode: "0640"
+  become: true
+  notify: restart fluent-bit (systemd)
+
+- name: Deploy fluent-bit.conf
+  ansible.builtin.template:
+    src: fluent-bit-package.conf.j2
+    dest: "{{ fluentbit_conf_dir }}/fluent-bit.conf"
+    mode: "0640"           # contains the opensearch password
+  become: true
+  notify: restart fluent-bit (systemd)
+
+- name: Validate configuration (dry run)
+  ansible.builtin.command:
+    cmd: "{{ fluentbit_binary }} -c {{ fluentbit_conf_dir }}/fluent-bit.conf --dry-run"
+  become: true
+  changed_when: false
+
+- name: Enable and start fluent-bit
+  ansible.builtin.systemd:
+    name: "{{ fluentbit_service }}"
+    enabled: true
+    state: started
+  become: true

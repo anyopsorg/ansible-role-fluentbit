@@ -1,0 +1,167 @@
+-- {{ ansible_managed }}
+-- ---------------------------------------------------------------------------
+-- Docker/Swarm metadata enrichment for Fluent Bit.
+--
+-- The tail input tags each record `docker.<container_id>`. Docker already
+-- stores everything we need next to the log file itself, in
+--   /var/lib/docker/containers/<id>/config.v2.json
+-- so we read that instead of talking to docker.sock. That keeps the container
+-- off the Docker API (no socket mount, nothing to authorise) and works
+-- identically for swarm tasks and plain `docker run` containers.
+--
+-- Results are cached per container id. A container id is immutable and its
+-- name/image/labels never change for that id, so the cache never goes stale —
+-- a recreated container gets a new id and therefore a fresh lookup.
+-- ---------------------------------------------------------------------------
+
+local cache = {}
+local cache_n = 0
+-- Bound the cache so a long-lived collector on a busy node cannot grow without
+-- limit as containers are recreated. Cleared wholesale when the cap is hit;
+-- entries are cheap to rebuild (one small file read).
+local CACHE_MAX = 512
+
+local ENVIRONMENT       = "{{ fluentbit_environment }}"
+local FALLBACK_PROJECT  = "{{ fluentbit_fallback_project }}"
+local SELF_SERVICE      = "{{ fluentbit_stack_name }}_{{ fluentbit_service_name }}"
+local CONTAINERS_DIR    = "{{ fluentbit_docker_containers_dir }}"
+
+local EXCLUDED = {
+{% for p in fluentbit_exclude_projects %}
+  ["{{ p }}"] = true,
+{% endfor %}
+}
+
+-- OpenSearch index names must be lowercase and free of the characters below.
+-- Normalise anything we derive from a label into a safe, readable token.
+local function sanitize(s)
+  if not s or s == "" then return nil end
+  s = string.lower(s)
+  s = string.gsub(s, "[^a-z0-9%-]", "-")   -- '_' and '.' become '-'
+  s = string.gsub(s, "%-+", "-")           -- collapse runs
+  s = string.gsub(s, "^%-+", "")           -- must not start with '-'
+  s = string.gsub(s, "%-+$", "")
+  if s == "" then return nil end
+  return s
+end
+
+-- Strip a swarm task suffix: "crm_backend.1.uyyptdhkt3n28ow" -> "crm_backend"
+-- Replica index and task id are noise; the service name is the useful part.
+local function strip_task_suffix(name)
+  if not name then return nil end
+  local base = string.match(name, "^([^.]+)%.%d+%.%w+$")
+  return base or name
+end
+
+local function read_meta(cid)
+  local hit = cache[cid]
+  if hit then return hit end
+
+  local m = {}
+  local fh = io.open(CONTAINERS_DIR .. "/" .. cid .. "/config.v2.json", "r")
+  if fh then
+    local raw = fh:read("*a")
+    fh:close()
+
+    if raw then
+      -- Container name is the one "Name" value with a leading slash.
+      m.container_name = string.match(raw, '"Name":"/([^"]+)"')
+
+      -- config.v2.json holds both the top-level image digest
+      -- ("Image":"sha256:...") and the human tag ("Image":"harbor.../api:18036").
+      -- Keep the last non-digest value.
+      for img in string.gmatch(raw, '"Image":"([^"]+)"') do
+        if not string.match(img, "^sha256:") then m.image = img end
+      end
+
+      m.stack   = string.match(raw, '"com%.docker%.stack%.namespace":"([^"]+)"')
+      m.service = string.match(raw, '"com%.docker%.swarm%.service%.name":"([^"]+)"')
+      m.compose = string.match(raw, '"com%.docker%.compose%.project":"([^"]+)"')
+    end
+  end
+
+  -- Project precedence: swarm stack > compose project > service > container name.
+  m.project = sanitize(m.stack)
+            or sanitize(m.compose)
+            or sanitize(strip_task_suffix(m.service))
+            or sanitize(strip_task_suffix(m.container_name))
+            or FALLBACK_PROJECT
+
+  -- Service precedence: swarm service name, else the container name minus any
+  -- swarm task suffix.
+  m.service_name = m.service or strip_task_suffix(m.container_name) or "unknown"
+
+  m.index_prefix = m.project .. "-" .. ENVIRONMENT .. "-logs"
+
+  -- Never ship our own output — that is an unbounded feedback loop.
+  m.drop = (m.service == SELF_SERVICE) or EXCLUDED[m.project] or false
+
+  if cache_n >= CACHE_MAX then
+    cache = {}
+    cache_n = 0
+  end
+  cache[cid] = m
+  cache_n = cache_n + 1
+  return m
+end
+
+{% if fluentbit_extract_trace_ids %}
+-- Pull W3C trace context out of the log line so a trace in Grafana Tempo and
+-- the logs it produced can be joined on trace_id.
+--
+-- Spring Boot 3 + Micrometer/OTel prepend "[app,traceId,spanId]" to every line
+-- once tracing is on. Apps here do not emit it yet, so this is a no-op today —
+-- it starts populating by itself the moment tracing is enabled, with no change
+-- to this collector.
+local function extract_trace(record)
+  local line = record["log"]
+  if type(line) ~= "string" then return end
+  -- 32 hex = trace id, 16 hex = span id (W3C widths).
+  local app, trace_id, span_id =
+    string.match(line, "%[([^,%]]*),(%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x),(%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x)%]")
+  if trace_id then
+    record["trace_id"] = trace_id
+    record["span_id"]  = span_id
+    if app and app ~= "" then record["trace_app"] = app end
+  end
+end
+{% endif %}
+
+-- Fluent Bit filter entrypoint.
+-- return -1 => drop record, 2 => record replaced (timestamp untouched)
+function enrich(tag, timestamp, record)
+  local cid = string.match(tag, "^docker%.(%x+)$")
+  if not cid then
+    -- Tag did not carry a container id; ship it rather than lose it, but make
+    -- it obvious in the index that enrichment did not apply.
+    record["project"]          = FALLBACK_PROJECT
+    record["os_index_prefix"]  = FALLBACK_PROJECT .. "-" .. ENVIRONMENT .. "-logs"
+    return 2, timestamp, record
+  end
+
+  local m = read_meta(cid)
+  if m.drop then return -1, timestamp, record end
+
+  record["container_id"]    = string.sub(cid, 1, 12)
+  record["container_name"]  = m.container_name
+  record["image"]           = m.image
+  record["project"]         = m.project
+{% if fluentbit_ecs_mode %}
+  -- ECS mode: `service` belongs to the app (service.name/.version/.environment),
+  -- so the swarm service name goes somewhere that cannot collide with it.
+  record["swarm_service"]   = m.service_name
+{% else %}
+  record["service"]         = m.service_name
+{% endif %}
+  record["environment"]     = ENVIRONMENT
+  if m.stack then record["swarm_stack"] = m.stack end
+
+  -- Read by the output plugin's Logstash_Prefix_Key to pick the index.
+  record["os_index_prefix"] = m.index_prefix
+
+{% if fluentbit_extract_trace_ids %}
+  extract_trace(record)
+{% endif %}
+
+  return 2, timestamp, record
+end

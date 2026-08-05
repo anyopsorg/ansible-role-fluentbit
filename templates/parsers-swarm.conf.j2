@@ -1,0 +1,33 @@
+# {{ ansible_managed }}
+# Parsers for the Docker -> OpenSearch pipeline.
+
+# Docker's json-file envelope: {"log":"...","stream":"stdout","time":"..."}
+[PARSER]
+    Name        docker
+    Format      json
+    Time_Key    time
+    Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+    # Off: the value becomes the record timestamp and is emitted as @timestamp,
+    # so keeping `time` would duplicate it in every document.
+    Time_Keep   Off
+
+# Applied to the `log` field for apps that emit structured JSON. Non-JSON lines
+# simply fail to match and are kept as-is (Reserve_Data in the filter).
+[PARSER]
+    Name        app_json
+    Format      json
+    Time_Key    timestamp
+    Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+    Time_Keep   On
+
+{% if fluentbit_multiline_java %}
+# Fold Java exceptions into one record. A new record starts at a line that
+# begins with a timestamp or a log level; continuation lines are the indented
+# frames, "at ...", "Caused by:", and "... N more".
+[MULTILINE_PARSER]
+    Name          java_stack
+    Type          regex
+    Flush_Timeout 1000
+    Rule          "start_state"  "/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}|\[?(TRACE|DEBUG|INFO|WARN|ERROR|FATAL))/"  "cont"
+    Rule          "cont"         "/^(\s+at\s|\s*Caused by:|\s*Suppressed:|\s*\.\.\.\s+\d+\s+more|\s+\w+(\.\w+)+:|\t)/"   "cont"
+{% endif %}

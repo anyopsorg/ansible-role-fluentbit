@@ -1,0 +1,83 @@
+---
+# =============================================================================
+# fluentbit — mode dispatcher + shared preflight
+# =============================================================================
+
+- name: Assert required variables are set
+  ansible.builtin.assert:
+    that:
+      - fluentbit_mode in ['package', 'swarm']
+      - fluentbit_os_password is defined
+      - fluentbit_os_password | length > 0
+      - fluentbit_os_user | length > 0
+    fail_msg: >-
+      fluentbit_mode must be 'package' or 'swarm', and
+      fluentbit_os_user/fluentbit_os_password must be set.
+      The password belongs in a vaulted secrets file, never in plain host_vars.
+    quiet: true
+  tags: [fluentbit, always]
+
+- name: Assert package-mode inputs are defined
+  ansible.builtin.assert:
+    that:
+      - fluentbit_tail_inputs | length > 0
+    fail_msg: >-
+      package mode needs at least one entry in fluentbit_tail_inputs
+      (tag + path of a file to tail).
+    quiet: true
+  when: fluentbit_mode == 'package'
+  tags: [fluentbit, always]
+
+# --- Name resolution (both modes) -------------------------------------------
+- name: Pin OpenSearch hostnames in /etc/hosts until DNS exists
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - fluentbit"
+    state: "{{ 'present' if fluentbit_extra_hosts else 'absent' }}"
+    block: |
+      {% for name, ip in fluentbit_extra_hosts.items() %}
+      {{ ip }} {{ name }}
+      {% endfor %}
+  become: true
+  tags: [fluentbit]
+
+# --- Preflight (both modes) --------------------------------------------------
+# Reported but non-fatal: if the endpoint is down, Fluent Bit buffers to disk
+# and drains once it recovers, so deploying anyway is the right behaviour.
+- name: Preflight — verify the OpenSearch endpoint accepts the ingest user
+  ansible.builtin.uri:
+    url: "https://{{ fluentbit_os_host }}:{{ fluentbit_os_port }}/_cluster/health"
+    user: "{{ fluentbit_os_user }}"
+    password: "{{ fluentbit_os_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ fluentbit_os_tls_verify == 'On' }}"
+    use_proxy: false
+    return_content: true
+    timeout: 15
+  register: fluentbit_preflight
+  failed_when: false
+  changed_when: false
+  when: fluentbit_preflight_check | bool
+  tags: [fluentbit, preflight]
+
+- name: Preflight — report result
+  ansible.builtin.debug:
+    msg: >-
+      {% if fluentbit_preflight.status | default(0) == 200 %}
+      OpenSearch reachable — cluster status
+      {{ (fluentbit_preflight.json | default({})).status | default('unknown') }}.
+      {% else %}
+      WARNING: {{ fluentbit_os_host }}:{{ fluentbit_os_port }} returned
+      '{{ fluentbit_preflight.status | default("no response") }}'. Deploying anyway —
+      Fluent Bit will buffer to disk and drain when the endpoint recovers.
+      {% endif %}
+  when: fluentbit_preflight_check | bool
+  tags: [fluentbit, preflight]
+
+# --- Mode-specific deployment ------------------------------------------------
+- name: Deploy fluent-bit ({{ fluentbit_mode }} mode)
+  ansible.builtin.include_tasks:
+    file: "{{ fluentbit_mode }}.yml"
+    apply:
+      tags: [fluentbit]
+  tags: [fluentbit]
