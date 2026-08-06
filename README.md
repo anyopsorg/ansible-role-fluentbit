@@ -58,6 +58,27 @@ ansible-galaxy install -r requirements.yml --force
               log_host: "{{ inventory_hostname }}"
 ```
 
+### Air-gapped hosts (no internet egress)
+
+`fluentbit_install_method: offline` skips the packages.fluentbit.io repo and
+instead pushes a package file from the **controller** to the host over SSH and
+installs it locally — the host needs no egress at all:
+
+```yaml
+        fluentbit_install_method: offline
+        fluentbit_offline_package_src: "~/fluent-bit_4.2.2_amd64.deb"   # path on the controller
+```
+
+Download the package on any machine with internet, matching the host's
+distro/codename/arch (`cat /etc/os-release`, `uname -m`):
+
+```
+https://packages.fluentbit.io/<distro>/<codename>/pool/<codename>/f/fluent-bit/fluent-bit_<version>_<arch>.deb
+https://packages.fluentbit.io/centos/<releasever>/fluent-bit-<version>.<arch>.rpm
+```
+
+Upgrades: point `fluentbit_offline_package_src` at a newer package and re-run.
+
 ## swarm mode — Docker container logs (MKB example)
 
 ```yaml

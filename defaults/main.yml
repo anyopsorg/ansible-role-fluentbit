@@ -58,6 +58,18 @@ fluentbit_extra_hosts: {}
 # =============================================================================
 # PACKAGE MODE
 # =============================================================================
+# How the package reaches the host:
+#   repo    — add packages.fluentbit.io and install (host needs internet egress)
+#   offline — push a .deb/.rpm held on the ansible controller over SSH and
+#             install it locally; for air-gapped hosts with no egress.
+#             Requires fluentbit_offline_package_src.
+fluentbit_install_method: "repo"
+# Controller-side path to the fluent-bit package (offline method only).
+# Download it on any machine with internet, matching the host's distro/arch:
+#   deb: https://packages.fluentbit.io/<distro>/<codename>/pool/<codename>/f/fluent-bit/fluent-bit_<version>_<arch>.deb
+#   rpm: https://packages.fluentbit.io/centos/<releasever>/fluent-bit-<version>.<arch>.rpm
+fluentbit_offline_package_src: ""
+
 fluentbit_package: "fluent-bit"
 fluentbit_service: "fluent-bit"
 fluentbit_conf_dir: "/etc/fluent-bit"
