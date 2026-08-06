@@ -73,7 +73,7 @@ Download the package on any machine with internet, matching the host's
 distro/codename/arch (`cat /etc/os-release`, `uname -m`):
 
 ```
-https://packages.fluentbit.io/<distro>/<codename>/pool/<codename>/f/fluent-bit/fluent-bit_<version>_<arch>.deb
+https://packages.fluentbit.io/<distro>/<codename>/pool/main/f/fluent-bit/fluent-bit_<version>_<arch>.deb
 https://packages.fluentbit.io/centos/<releasever>/fluent-bit-<version>.<arch>.rpm
 ```
 

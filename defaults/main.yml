@@ -66,7 +66,7 @@ fluentbit_extra_hosts: {}
 fluentbit_install_method: "repo"
 # Controller-side path to the fluent-bit package (offline method only).
 # Download it on any machine with internet, matching the host's distro/arch:
-#   deb: https://packages.fluentbit.io/<distro>/<codename>/pool/<codename>/f/fluent-bit/fluent-bit_<version>_<arch>.deb
+#   deb: https://packages.fluentbit.io/<distro>/<codename>/pool/main/f/fluent-bit/fluent-bit_<version>_<arch>.deb
 #   rpm: https://packages.fluentbit.io/centos/<releasever>/fluent-bit-<version>.<arch>.rpm
 fluentbit_offline_package_src: ""
 
