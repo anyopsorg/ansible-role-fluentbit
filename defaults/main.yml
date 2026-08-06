@@ -69,6 +69,12 @@ fluentbit_install_method: "repo"
 #   deb: https://packages.fluentbit.io/<distro>/<codename>/pool/main/f/fluent-bit/fluent-bit_<version>_<arch>.deb
 #   rpm: https://packages.fluentbit.io/centos/<releasever>/fluent-bit-<version>.<arch>.rpm
 fluentbit_offline_package_src: ""
+# Controller-side paths of dependency packages the host is missing (offline
+# method only) — pushed and installed together with the main package so apt/yum
+# never reaches for a mirror. E.g. the fluent-bit .deb depends on libpq5
+# (PostgreSQL output plugin); a minimal Ubuntu host won't have it:
+#   fluentbit_offline_deps: ["~/libpq5_16.11-0ubuntu0.24.04.1_amd64.deb"]
+fluentbit_offline_deps: []
 
 fluentbit_package: "fluent-bit"
 fluentbit_service: "fluent-bit"

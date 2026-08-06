@@ -48,23 +48,26 @@
   become: true
   when: fluentbit_install_method == "repo"
 
-- name: Push fluent-bit package to the host (offline)
+- name: Push fluent-bit package and dependencies to the host (offline)
   ansible.builtin.copy:
-    src: "{{ fluentbit_offline_package_src }}"
-    dest: "/var/tmp/{{ fluentbit_offline_package_src | basename }}"
+    src: "{{ item }}"
+    dest: "/var/tmp/{{ item | basename }}"
     mode: "0644"
   become: true
+  loop: "{{ fluentbit_offline_deps + [fluentbit_offline_package_src] }}"
   when: fluentbit_install_method == "offline"
 
-- name: Install fluent-bit from pushed package (Debian/Ubuntu offline)
+- name: Install fluent-bit from pushed packages (Debian/Ubuntu offline)
   ansible.builtin.apt:
-    deb: "/var/tmp/{{ fluentbit_offline_package_src | basename }}"
+    deb: "{{ (fluentbit_offline_deps + [fluentbit_offline_package_src])
+             | map('basename') | map('regex_replace', '^', '/var/tmp/') | list }}"
   become: true
   when: ansible_os_family == "Debian" and fluentbit_install_method == "offline"
 
-- name: Install fluent-bit from pushed package (RHEL/CentOS offline)
+- name: Install fluent-bit from pushed packages (RHEL/CentOS offline)
   ansible.builtin.yum:
-    name: "/var/tmp/{{ fluentbit_offline_package_src | basename }}"
+    name: "{{ (fluentbit_offline_deps + [fluentbit_offline_package_src])
+              | map('basename') | map('regex_replace', '^', '/var/tmp/') | list }}"
     disable_gpg_check: true
     state: present
   become: true

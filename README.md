@@ -66,8 +66,13 @@ installs it locally — the host needs no egress at all:
 
 ```yaml
         fluentbit_install_method: offline
-        fluentbit_offline_package_src: "~/fluent-bit_4.2.2_amd64.deb"   # path on the controller
+        fluentbit_offline_package_src: "~/fluent-bit.deb"       # path on the controller
+        fluentbit_offline_deps: ["~/libpq5.deb"]                # missing runtime deps, if any
 ```
+
+Dependencies the host lacks must be supplied the same way (`fluentbit_offline_deps`)
+— apt/yum installs everything in one transaction and never contacts a mirror.
+The fluent-bit .deb depends on `libpq5`; minimal Ubuntu hosts don't have it.
 
 Download the package on any machine with internet, matching the host's
 distro/codename/arch (`cat /etc/os-release`, `uname -m`):
