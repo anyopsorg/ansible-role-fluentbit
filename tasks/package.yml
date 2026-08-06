@@ -57,14 +57,15 @@
   loop: "{{ fluentbit_offline_deps + [fluentbit_offline_package_src] }}"
   when: fluentbit_install_method == "offline"
 
-# NOTE: joined to a comma-separated string — the apt module comma-splits `deb`
-# internally; a templated list can arrive stringified ("['/var/tmp/..']") and
-# apt then tries to open a path literally containing the bracket.
+# NOTE: one package per apt call, dependencies first. Given several local debs
+# at once, the apt module resolves each deb's dependencies against the apt
+# index (contacting a mirror) instead of against the other local files; installed
+# sequentially, each dep is already present when the next package is checked.
 - name: Install fluent-bit from pushed packages (Debian/Ubuntu offline)
   ansible.builtin.apt:
-    deb: "{{ (fluentbit_offline_deps + [fluentbit_offline_package_src])
-             | map('basename') | map('regex_replace', '^', '/var/tmp/') | join(',') }}"
+    deb: "/var/tmp/{{ item | basename }}"
   become: true
+  loop: "{{ fluentbit_offline_deps + [fluentbit_offline_package_src] }}"
   when: ansible_os_family == "Debian" and fluentbit_install_method == "offline"
 
 - name: Install fluent-bit from pushed packages (RHEL/CentOS offline)
