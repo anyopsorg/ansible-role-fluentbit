@@ -107,7 +107,18 @@ Swarm-mode extras (see `defaults/main.yml` for the full documented list):
 Java stack-trace folding (`fluentbit_multiline_java`), JSON app-log lifting
 (`fluentbit_parse_json_logs`), ECS mode (`fluentbit_ecs_mode` — read the
 comment before enabling), W3C trace-id extraction
-(`fluentbit_extract_trace_ids`), project excludes, memory caps.
+(`fluentbit_extract_trace_ids`), project excludes, project renames
+(`fluentbit_project_map` — fold several compose apps into one index series;
+the original name is kept in `source_project`), memory caps.
+
+## Tags
+
+| tag | runs |
+|---|---|
+| `fluentbit` | everything |
+| `preflight` | the OpenSearch endpoint check only |
+| `config` | re-render the config (both modes), validate it (package), restart to apply |
+| `verify` | confirm the collector is running (swarm task state / package health endpoint) |
 
 ## Variable migration from the old per-repo roles
 

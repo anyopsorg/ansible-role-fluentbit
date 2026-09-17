@@ -96,6 +96,7 @@
     mode: "0640"
   become: true
   notify: restart fluent-bit (systemd)
+  tags: [config]
 
 - name: Deploy fluent-bit.conf
   ansible.builtin.template:
@@ -104,12 +105,14 @@
     mode: "0640"           # contains the opensearch password
   become: true
   notify: restart fluent-bit (systemd)
+  tags: [config]
 
 - name: Validate configuration (dry run)
   ansible.builtin.command:
     cmd: "{{ fluentbit_binary }} -c {{ fluentbit_conf_dir }}/fluent-bit.conf --dry-run"
   become: true
   changed_when: false
+  tags: [config]
 
 - name: Enable and start fluent-bit
   ansible.builtin.systemd:
@@ -117,3 +120,28 @@
     enabled: true
     state: started
   become: true
+
+- name: Apply config changes now
+  ansible.builtin.meta: flush_handlers
+  tags: [config]
+
+# --- Verify ----------------------------------------------------------------
+- name: Wait for the fluent-bit health endpoint
+  ansible.builtin.uri:
+    url: "http://{{ '127.0.0.1' if fluentbit_http_listen in ['0.0.0.0', '127.0.0.1'] else fluentbit_http_listen }}:{{ fluentbit_http_port }}/api/v1/health"
+    use_proxy: false
+    return_content: true
+  register: fluentbit_health
+  until: fluentbit_health.status == 200
+  retries: 12
+  delay: 5
+  when: fluentbit_http_server | bool and not ansible_check_mode
+  tags: [verify]
+
+- name: Report deployment state
+  ansible.builtin.debug:
+    msg: >-
+      fluent-bit (package) running on {{ inventory_hostname }}, tailing
+      {{ fluentbit_tail_inputs | map(attribute='path') | join(', ') }} ->
+      {{ fluentbit_os_host }} as {{ fluentbit_logstash_prefix }}-YYYY.MM.DD
+  tags: [verify]

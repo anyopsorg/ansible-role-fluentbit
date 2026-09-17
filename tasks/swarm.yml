@@ -45,6 +45,7 @@
     - { src: parsers-swarm.conf.j2, dest: parsers.conf }
     - { src: enrich_docker.lua.j2, dest: enrich_docker.lua }
   notify: restart fluent-bit (swarm)
+  tags: [config]
 
 # Holds the ingest password, so root-only.
 - name: Deploy the Swarm stack file
@@ -85,6 +86,7 @@
 # container — the handler forces a rolling update to pick it up.
 - name: Flush handlers so config changes take effect now
   ansible.builtin.meta: flush_handlers
+  tags: [config]
 
 # --- Verify ----------------------------------------------------------------
 - name: Wait for the service to report a running task
@@ -101,6 +103,7 @@
   become: true
   # Nothing was actually deployed under --check, so there is no task to wait for.
   when: not ansible_check_mode
+  tags: [verify]
 
 - name: Report deployment state
   ansible.builtin.debug:
@@ -109,3 +112,4 @@
       {{ fluentbit_stack_name }}_{{ fluentbit_service_name }} (global) —
       shipping to {{ fluentbit_os_host }} as
       <project>-{{ fluentbit_environment }}-logs-YYYY.MM.DD
+  tags: [verify]

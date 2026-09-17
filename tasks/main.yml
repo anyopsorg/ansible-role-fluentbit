@@ -80,4 +80,6 @@
     file: "{{ fluentbit_mode }}.yml"
     apply:
       tags: [fluentbit]
-  tags: [fluentbit]
+  # config / verify must be on the include too, or `--tags config` never
+  # reaches the tasks inside it.
+  tags: [fluentbit, config, verify]
