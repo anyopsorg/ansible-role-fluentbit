@@ -135,6 +135,12 @@ fluentbit_docker_containers_dir: "/var/lib/docker/containers"
 fluentbit_environment: "prod"
 fluentbit_fallback_project: "unclassified"
 fluentbit_exclude_projects: []
+# Rename a derived project before it becomes the index prefix, keyed by the
+# sanitized name (lowercase, '_' -> '-'). Use it to fold a host's standalone
+# compose apps into the product that owns them, so they share one index series.
+# The original name is kept in `source_project` (map it as keyword).
+#   fluentbit_project_map: {billing-api: payments, billing-worker: payments}
+fluentbit_project_map: {}
 
 # Join Java stack traces onto the preceding line (one exception, one document).
 fluentbit_multiline_java: true

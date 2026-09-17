@@ -32,6 +32,13 @@ local EXCLUDED = {
 {% endfor %}
 }
 
+-- Derived project -> project actually shipped (fluentbit_project_map).
+local PROJECT_MAP = {
+{% for src, dst in fluentbit_project_map.items() %}
+  ["{{ src }}"] = "{{ dst }}",
+{% endfor %}
+}
+
 -- OpenSearch index names must be lowercase and free of the characters below.
 -- Normalise anything we derive from a label into a safe, readable token.
 local function sanitize(s)
@@ -87,6 +94,13 @@ local function read_meta(cid)
             or sanitize(strip_task_suffix(m.container_name))
             or FALLBACK_PROJECT
 
+  -- Exclusion is checked on the derived name, before any remap.
+  m.excluded = EXCLUDED[m.project] or false
+  if PROJECT_MAP[m.project] then
+    m.source_project = m.project
+    m.project = PROJECT_MAP[m.project]
+  end
+
   -- Service precedence: swarm service name, else the container name minus any
   -- swarm task suffix.
   m.service_name = m.service or strip_task_suffix(m.container_name) or "unknown"
@@ -94,7 +108,7 @@ local function read_meta(cid)
   m.index_prefix = m.project .. "-" .. ENVIRONMENT .. "-logs"
 
   -- Never ship our own output — that is an unbounded feedback loop.
-  m.drop = (m.service == SELF_SERVICE) or EXCLUDED[m.project] or false
+  m.drop = (m.service == SELF_SERVICE) or m.excluded or EXCLUDED[m.project] or false
 
   if cache_n >= CACHE_MAX then
     cache = {}
@@ -146,6 +160,7 @@ function enrich(tag, timestamp, record)
   record["container_name"]  = m.container_name
   record["image"]           = m.image
   record["project"]         = m.project
+  if m.source_project then record["source_project"] = m.source_project end
 {% if fluentbit_ecs_mode %}
   -- ECS mode: `service` belongs to the app (service.name/.version/.environment),
   -- so the swarm service name goes somewhere that cannot collide with it.
