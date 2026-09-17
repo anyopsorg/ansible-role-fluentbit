@@ -5,6 +5,8 @@
     name: "{{ fluentbit_service }}"
     state: restarted
   become: true
+  # On a first --check run the unit does not exist yet.
+  ignore_errors: "{{ ansible_check_mode }}"
 
 # swarm mode — the config is bind-mounted, so rewriting it does not restart the
 # process. Force a rolling update so the new config is loaded.
