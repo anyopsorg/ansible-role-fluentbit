@@ -66,7 +66,8 @@
     deb: "/var/tmp/{{ item | basename }}"
   become: true
   loop: "{{ fluentbit_offline_deps + [fluentbit_offline_package_src] }}"
-  when: ansible_os_family == "Debian" and fluentbit_install_method == "offline"
+  # Under --check the push above is only simulated, so there is nothing to install.
+  when: ansible_os_family == "Debian" and fluentbit_install_method == "offline" and not ansible_check_mode
 
 - name: Install fluent-bit from pushed packages (RHEL/CentOS offline)
   ansible.builtin.yum:
@@ -75,7 +76,7 @@
     disable_gpg_check: true
     state: present
   become: true
-  when: ansible_os_family == "RedHat" and fluentbit_install_method == "offline"
+  when: ansible_os_family == "RedHat" and fluentbit_install_method == "offline" and not ansible_check_mode
 
 - name: Ensure state dir for tail DB and disk buffer
   ansible.builtin.file:
@@ -120,6 +121,8 @@
     enabled: true
     state: started
   become: true
+  # On a first --check run the package (and so the unit) is not installed yet.
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Apply config changes now
   ansible.builtin.meta: flush_handlers

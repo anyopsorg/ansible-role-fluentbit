@@ -56,6 +56,9 @@
     timeout: 15
   register: fluentbit_preflight
   failed_when: false
+  # Read-only GET; uri has no check-mode support, so without this --check
+  # always reports "no response".
+  check_mode: false
   changed_when: false
   when: fluentbit_preflight_check | bool
   tags: [fluentbit, preflight]
